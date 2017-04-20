@@ -42,8 +42,15 @@ def generate_feedback(mission_config, user, team_eval):
             mission_clock_time += duration
     feedback.mission_clock_time_sec = mission_clock_time.total_seconds()
 
-    # Find the user's flights.
+    # Calculate total time in air.
     flight_periods = TakeoffOrLandingEvent.flights(user)
+    if flight_periods:
+        flight_time = reduce(lambda x, y: x + y, [p.duration()
+                                                  for p in flight_periods])
+        feedback.flight_time_sec = flight_time.total_seconds()
+    else:
+        feedback.flight_time_sec = 0
+    # Find the user's flights.
     for period in flight_periods:
         if period.duration() is None:
             team_eval.warnings.append('Infinite flight period.')
@@ -122,22 +129,117 @@ def score_team(team_eval):
     feedback = team_eval.feedback
     score = team_eval.score
 
+    # Can't score without judge feedback.
+    if not feedback.HasField('judge'):
+        team_eval.warnings.append('Cant score due to no judge feedback.')
+        return
+
+    # Determine telemetry prerequisite.
+    telem_prereq = False
+    if (feedback.HasField('uas_telemetry_time_avg_sec') and
+            feedback.uas_telemetry_time_avg_sec > 0):
+        telem_prereq = feedback.uas_telemetry_time_avg_sec <= settings.INTEROP_TELEM_THRESHOLD_TIME_SEC
     # Score timeline.
+    timeline = score.timeline
     flight_points = feedback.judge.flight_time_sec * settings.FLIGHT_TIME_SEC_TO_POINTS
     process_points = feedback.judge.post_process_time_sec * settings.PROCESS_TIME_SEC_TO_POINTS
     total_time_points = max(
         0, settings.MISSION_TIME_TOTAL_POINTS - flight_points - process_points)
-    score.timeline.mission_time = total_time_points / settings.MISSION_TIME_TOTAL_POINTS
+    timeline.mission_time = total_time_points / settings.MISSION_TIME_TOTAL_POINTS
     total_time = feedback.judge.flight_time_sec + feedback.judge.post_process_time_sec
     over_time = max(0, total_time - settings.MISSION_MAX_TIME_SEC)
-    score.timeline.mission_penalty = over_time * settings.MISSION_TIME_PENALTY_FROM_SEC
-    score.timeline.timeout = 0 if feedback.judge.used_timeout else 1
-    score.timeline.score_ratio = (
-        (settings.MISSION_TIME_WEIGHT * score.timeline.mission_time) +
+    timeline.mission_penalty = over_time * settings.MISSION_TIME_PENALTY_FROM_SEC
+    timeline.timeout = 0 if feedback.judge.used_timeout else 1
+    timeline.score_ratio = (
+        (settings.MISSION_TIME_WEIGHT * timeline.mission_time) +
         (settings.TIMEOUT_WEIGHT *
-         score.timeline.timeout) - score.timeline.mission_penalty)
+         timeline.timeout) - timeline.mission_penalty)
 
-    # TODO(pmtischler): Rest of scoring.
+    # Score autonomous flight.
+    flight = score.autonomous_flight
+    manual_flight = feedback.judge.manual_flight_time_sec
+    autonomous_flight = \
+            feedback.flight_time_sec - manual_flight
+    if (autonomous_flight >= settings.AUTONOMOUS_FLIGHT_TIME_SEC and
+            manual_flight <= settings.MANUAL_FLIGHT_TIME_SEC):
+        takeovers = feedback.judge.safety_pilot_takeovers
+        flight.flight = max(0, 1 -
+                            (takeovers * settings.AUTONOMOUS_FLIGHT_TAKEOVER))
+    else:
+        flight.flight = 0
+    flight.telemetry_prerequisite = telem_prereq
+    flight.waypoint_capture = (float(feedback.judge.waypoints_captured) /
+                               len(feedback.waypoints))
+    wpt_scores = [w.score_ratio for w in feedback.waypoints]
+    if telem_prereq:
+        flight.waypoint_accuracy = (reduce(lambda x, y: x + y, wpt_scores) /
+                                    len(feedback.waypoints))
+    else:
+        flight.waypoint_accuracy = 0
+    flight.out_of_bounds_penalty = (
+        feedback.judge.out_of_bounds * settings.BOUND_PENALTY +
+        feedback.judge.unsafe_out_of_bounds * settings.SAFETY_BOUND_PENALTY)
+    flight.score_ratio = (
+        settings.AUTONOMOUS_FLIGHT_FLIGHT_WEIGHT * flight.flight +
+        settings.WAYPOINT_CAPTURE_WEIGHT * flight.waypoint_capture +
+        settings.WAYPOINT_ACCURACY_WEIGHT * flight.waypoint_accuracy -
+        flight.out_of_bounds_penalty)
+
+    # Score obstacle avoidance.
+    avoid = score.obstacle_avoidance
+    avoid.telemetry_prerequisite = telem_prereq
+    if telem_prereq:
+        avoid.stationary_obstacle = (reduce(
+            lambda x, y: x + y, [0.0 if o.hit else 1.0
+                                 for o in feedback.stationary_obstacles]) /
+                                     len(feedback.stationary_obstacles))
+        avoid.moving_obstacle = (reduce(lambda x, y: x + y,
+                                        [0.0 if o.hit else 1.0
+                                         for o in feedback.moving_obstacles]) /
+                                 len(feedback.moving_obstacles))
+    else:
+        avoid.stationary_obstacle = 0
+        avoid.moving_obstacle = 0
+    avoid.score_ratio = (
+        avoid.stationary_obstacle * settings.STATIONARY_OBST_WEIGHT +
+        avoid.moving_obstacle * settings.STATIONARY_OBST_WEIGHT)
+
+    # Score objects.
+    objects = score.object
+    object_eval = feedback.target
+    object_field_mapping = [
+        ('classifications_score_ratio', 'characteristics'),
+        ('geolocation_score_ratio', 'geolocation'),
+        ('actionable_score_ratio', 'actionable'),
+        ('autonomous_score_ratio', 'autonomy'),
+        ('interop_score_ratio', 'interoperability'),
+    ]
+    for eval_field, score_field in object_field_mapping:
+        total = reduce(lambda x, y: x + y, [getattr(o, eval_field)
+                                            for o in object_eval.targets])
+        setattr(objects, score_field, float(total) / len(object_eval.targets))
+    objects.extra_object_penalty = object_eval.extra_object_penalty_ratio
+    objects.score_ratio = object_eval.score_ratio
+
+    # Score air delivery.
+    air = score.air_delivery
+    air.delivery_accuracy = feedback.judge.air_delivery_accuracy_ft
+    air.score_ratio = max(
+        0, (settings.AIR_DELIVERY_THRESHOLD_FT - air.delivery_accuracy) /
+        settings.AIR_DELIVERY_THRESHOLD_FT)
+
+    # Score operational excellence.
+    score.operational_excellence.score_ratio = (
+        feedback.judge.operational_excellence_percent / 100.0)
+
+    # Compute total score.
+    score.score_ratio = (
+        settings.TIMELINE_WEIGHT * score.timeline.score_ratio +
+        settings.AUTONOMOUS_WEIGHT * score.autonomous_flight.score_ratio +
+        settings.OBSTACLE_WEIGHT * score.obstacle_avoidance.score_ratio +
+        settings.OBJECT_WEIGHT * score.object.score_ratio +
+        settings.AIR_DELIVERY_WEIGHT * score.air_delivery.score_ratio +
+        settings.OPERATIONAL_WEIGHT * score.operational_excellence.score_ratio)
 
 
 def evaluate_teams(mission_config, users=None):

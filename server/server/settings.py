@@ -204,6 +204,9 @@ OUT_OF_BOUNDS_DEBOUNCE_SEC = 10.0
 # The max distance for a waypoint to be considered satisfied.
 SATISFIED_WAYPOINT_DIST_MAX_FT = 100
 
+# The time between interop telemetry posts that's a prereq for other tasks.
+INTEROP_TELEM_THRESHOLD_TIME_SEC = 1.0
+
 # Ratio of object points to lose for every extra unmatched object submitted.
 EXTRA_OBJECT_PENALTY_RATIO = 0.05
 # The weight of classification accuracy when calculating a target match score.
@@ -235,6 +238,33 @@ MISSION_TIME_TOTAL_POINTS = MISSION_MAX_TIME_SEC * max(
 # Mission time points lost due for every second over time.
 MISSION_TIME_PENALTY_FROM_SEC = MISSION_TIME_WEIGHT * 0.01
 
-# Total mission time 
-# Weight for 
-# Max weighted time.
+# Threshold time for getting autonomous flight points.
+AUTONOMOUS_FLIGHT_TIME_SEC = 60.0 * 3.0
+MANUAL_FLIGHT_TIME_SEC = 60.0 * 3.0
+# Ratio of points lost per takeover.
+AUTONOMOUS_FLIGHT_TAKEOVER = 0.25
+# Ratio of points lost per out of bounds.
+BOUND_PENALTY = 0.2
+SAFETY_BOUND_PENALTY = 1.0
+# Weight of flight points to all autonomous flight.
+AUTONOMOUS_FLIGHT_FLIGHT_WEIGHT = 0.4
+# Weight of capture points to all autonomous flight.
+WAYPOINT_CAPTURE_WEIGHT = 0.1
+# Weight of accuracy points to all autonomous flight.
+WAYPOINT_ACCURACY_WEIGHT = 0.5
+
+# Weight of stationary obstacle avoidance.
+STATIONARY_OBST_WEIGHT = 0.5
+# Weight of moving obstacle avoidance.
+MOVING_OBST_WEIGHT = 0.5
+
+# Air delivery accuracy threshold.
+AIR_DELIVERY_THRESHOLD_FT = 150.0
+
+# Scoring weights.
+TIMELINE_WEIGHT = 0.1
+AUTONOMOUS_WEIGHT = 0.3
+OBSTACLE_WEIGHT = 0.2
+OBJECT_WEIGHT = 0.2
+AIR_DELIVERY_WEIGHT = 0.1
+OPERATIONAL_WEIGHT = 0.1

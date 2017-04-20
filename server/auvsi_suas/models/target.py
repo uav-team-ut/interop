@@ -389,8 +389,10 @@ class TargetEvaluator(object):
             return target_eval
 
         # Compute values which influence score and are provided as feedback.
-        target_eval.image_approved = submitted.thumbnail_approved
-        if submitted.target_type == TargetType.emergent:
+        if submitted.thumbnail_approved is not None:
+            target_eval.image_approved = submitted.thumbnail_approved
+        if (submitted.target_type == TargetType.emergent and
+                submitted.description_approved is not None):
             target_eval.description_approved = submitted.description_approved
         target_eval.classifications_ratio = real.similar_classifications_ratio(
             submitted)
@@ -496,9 +498,11 @@ class TargetEvaluator(object):
         multi_eval = target_pb2.MultiTargetEvaluation()
         # Compute match value.
         for real in self.real_targets:
+            target_eval = multi_eval.targets.add()
+            target_eval.real_target = real.pk
+            target_eval.score_ratio = 0
             submitted = self.matches.get(real)
             if submitted:
-                target_eval = multi_eval.targets.add()
                 target_eval.CopyFrom(self.evaluate_match(submitted, real))
         if self.real_targets:
             multi_eval.matched_score_ratio = sum(
