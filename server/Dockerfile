@@ -1,8 +1,8 @@
-FROM ubuntu:14.04
+FROM armv7/armhf-ubuntu:14.04
 WORKDIR /interop/server
 
 # Install server base dependencies.
-RUN sudo apt-get -qq update && sudo apt-get -qq install -y \
+RUN sudo apt-get update && sudo apt-get install -y \
         apache2 \
         apache2-utils \
         curl \
