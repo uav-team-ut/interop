@@ -27,13 +27,13 @@ RUN sudo apt-get update && sudo apt-get install -y \
         python-scipy
 
 # Install server Javascript requirements.
-RUN sudo ln -snf /usr/bin/nodejs /usr/local/bin/node && \
-    sudo npm install -g \
-        karma \
-        karma-chrome-launcher \
-        karma-jasmine \
-        karma-phantomjs-launcher \
-        phantomjs
+# RUN sudo ln -snf /usr/bin/nodejs /usr/local/bin/node && \
+#     sudo npm install -g \
+#         karma \
+#         karma-chrome-launcher \
+#         karma-jasmine \
+#         karma-phantomjs-launcher \
+#         phantomjs
 
 # Install server Python requirements.
 COPY requirements.txt requirements.txt
@@ -61,7 +61,7 @@ RUN ./config/configure_proto.sh
 COPY . .
 
 # Load initial data.
-RUN sudo service postgresql start && \
+RUN sudo service postgresql start && sleep 180 && \
     python manage.py loaddata fixtures/test_fixture.yaml
 
 # Host-mountable sections.
