@@ -55,7 +55,7 @@ def mission_proto(mission):
     mission_proto.id = mission.pk
 
     mission_proto.lost_comms_pos.latitude = mission.lost_comms_pos.latitude
-    mission_proto.lost_comms_pos.longitude = mission.lost_comms_pos.latitude
+    mission_proto.lost_comms_pos.longitude = mission.lost_comms_pos.longitude
 
     for fly_zone in mission.fly_zones.all():
         fly_zone_proto = mission_proto.fly_zones.add()
