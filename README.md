@@ -270,9 +270,38 @@ the interop server was at `10.10.130.2:8000`, requesting for mission ID 1.
 ##### Upload Objects
 
 The client image provides a script to upload detected objects to the interop
-server from a directory of objects and thumbnails in the "Object File Format",
-described in the appendix of the rules. The following shows how to upload
-objects from the client container shell.
+server from a directory of files. Each object to be uploaded gets 2 files in
+the directory, both of which start with a number unique to the object, where
+one has the extension `json`, and the other has either the extension `jpg` or
+`png`. The `json` extension file must contain a JSON formatted object data
+conforming to the `POST /api/odlcs` data segment. A `jpg` extension file must
+be a JPEG image, and a `png` extension file must be a PNG image. The following
+shows how to upload objects from the client container shell.
+
+Example folder structure with two objects:
+
+* folder/
+  * 1.json
+  * 1.jpg
+  * 2.json
+  * 2.png
+
+Example JSON file:
+
+```
+{
+  "type": "standard",
+  "latitude": 38.1478,
+  "longitude": -76.4275,
+  "orientation": "n",
+  "shape": "star",
+  "background_color": "orange",
+  "alphanumeric": "C",
+  "alphanumeric_color": "black"
+}
+```
+
+Exaxmple command to upload:
 
 ```bash
 ./tools/interop_cli.py \
