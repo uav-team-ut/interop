@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Format files in the repository.
 # Either all file, or only those changed sinced commit-ish.

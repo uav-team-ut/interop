@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Utility scripts.
 
 CLIENT=$(dirname ${BASH_SOURCE[0]})

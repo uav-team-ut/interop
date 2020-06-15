@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Utility scripts.
 
 SERVER=$(dirname ${BASH_SOURCE[0]})

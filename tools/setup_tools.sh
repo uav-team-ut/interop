@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Installs software for tools.
 
 TOOLS=$(dirname ${BASH_SOURCE[0]})

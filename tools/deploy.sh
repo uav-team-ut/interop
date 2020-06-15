@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Deploys Docker containers to hub.
 
 set -e

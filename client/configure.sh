@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Configures the Interop Client for the Docker image build.
 
 CLIENT=$(dirname ${BASH_SOURCE[0]})
