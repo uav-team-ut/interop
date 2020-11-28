@@ -81,8 +81,8 @@ DATABASES = {
         'USER': 'postgres',
         'PASSWORD': 'postgres',
         'CONN_MAX_AGE': None,
-        'HOST': 'interop-db',
-        'PORT': '5432',
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT'),
         'TEST': {
             'NAME': 'test_auvsi_suas_db',
         },
