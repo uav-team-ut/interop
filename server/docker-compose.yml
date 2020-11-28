@@ -15,6 +15,9 @@ services:
       cache_from:
         - auvsisuas/interop-server:latest
     image: auvsisuas/interop-server
+    environment:
+      DB_HOST: interop-db
+      DB_PORT: 5432
     volumes:
       - ./volumes/mount:/mount
       - ./volumes/logs/uwsgi:/var/log/uwsgi
