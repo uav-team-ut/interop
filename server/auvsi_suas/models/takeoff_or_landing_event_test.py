@@ -1,23 +1,74 @@
 """Tests for the takeoff_or_landing_event module."""
 
 import datetime
+from auvsi_suas.models.aerial_position import AerialPosition
+from auvsi_suas.models.gps_position import GpsPosition
+from auvsi_suas.models.mission_config import MissionConfig
 from auvsi_suas.models.takeoff_or_landing_event import TakeoffOrLandingEvent
 from auvsi_suas.models.time_period import TimePeriod
-from auvsi_suas.models.access_log_test import TestAccessLogCommon
-from django.utils import timezone
+from auvsi_suas.models.waypoint import Waypoint
+from auvsi_suas.models.access_log_test import TestAccessLogMixinCommon
 
 
-class TestTakeoffOrLandingEventModel(TestAccessLogCommon):
+class TestTakeoffOrLandingEventModel(TestAccessLogMixinCommon):
     """Tests the TakeoffOrLandingEvent model."""
-
     def setUp(self):
         super(TestTakeoffOrLandingEventModel, self).setUp()
 
+        # Mission
+        pos = GpsPosition()
+        pos.latitude = 10
+        pos.longitude = 100
+        pos.save()
+        apos = AerialPosition()
+        apos.latitude = 10
+        apos.longitude = 100
+        apos.altitude_msl = 1000
+        apos.save()
+        wpt = Waypoint()
+        wpt.latitude = 10
+        wpt.longitude = 100
+        wpt.altitude_msl = 1000
+        wpt.order = 10
+        wpt.save()
+        self.mission = MissionConfig()
+        self.mission.home_pos = pos
+        self.mission.lost_comms_pos = pos
+        self.mission.emergent_last_known_pos = pos
+        self.mission.off_axis_odlc_pos = pos
+        self.mission.map_center_pos = pos
+        self.mission.map_height_ft = 1
+        self.mission.air_drop_pos = pos
+        self.mission.ugv_drive_pos = pos
+        self.mission.save()
+        self.mission.mission_waypoints.add(wpt)
+        self.mission.search_grid_points.add(wpt)
+        self.mission.save()
+
+        # Mission 2
+        self.mission2 = MissionConfig()
+        self.mission2.home_pos = pos
+        self.mission2.lost_comms_pos = pos
+        self.mission2.emergent_last_known_pos = pos
+        self.mission2.off_axis_odlc_pos = pos
+        self.mission2.map_center_pos = pos
+        self.mission2.map_height_ft = 1
+        self.mission2.air_drop_pos = pos
+        self.mission2.ugv_drive_pos = pos
+        self.mission2.save()
+        self.mission2.mission_waypoints.add(wpt)
+        self.mission2.search_grid_points.add(wpt)
+        self.mission2.save()
+
         self.ten_minutes = datetime.timedelta(minutes=10)
 
-    def create_event(self, time, uas_in_air):
+    def create_event(self, time, uas_in_air, mission=None):
         """Create a TakeoffOrLandingEvent for test user."""
-        event = TakeoffOrLandingEvent(user=self.user1, uas_in_air=uas_in_air)
+        if mission is None:
+            mission = self.mission
+        event = TakeoffOrLandingEvent(user=self.user1,
+                                      mission=mission,
+                                      uas_in_air=uas_in_air)
         event.save()
         event.timestamp = time
         event.save()
@@ -25,15 +76,9 @@ class TestTakeoffOrLandingEventModel(TestAccessLogCommon):
 
     def evaluate_periods(self, expected):
         """Check actual periods against expected."""
-        periods = TakeoffOrLandingEvent.flights(self.user1)
+        periods = TakeoffOrLandingEvent.flights(self.mission, self.user1)
 
         self.assertSequenceEqual(expected, periods)
-
-    def test_unicode(self):
-        """Tests the unicode method executes."""
-        log = TakeoffOrLandingEvent(user=self.user1, uas_in_air=True)
-        log.save()
-        self.assertIsNotNone(log.__unicode__())
 
     def test_basic_flight_period(self):
         """Single flight reported as period."""
@@ -84,6 +129,19 @@ class TestTakeoffOrLandingEventModel(TestAccessLogCommon):
         self.evaluate_periods([
             TimePeriod(self.year2000, self.year2000 + self.ten_minutes),
             TimePeriod(self.year2001, self.year2001 + self.ten_minutes),
+        ])
+
+    def test_flight_period_specific_mission(self):
+        """Tests that it only includes flights for specified mission."""
+        self.create_event(self.year2000, True)
+        self.create_event(self.year2000 + self.ten_minutes, False)
+
+        self.create_event(self.year2001, True, self.mission2)
+        self.create_event(self.year2001 + self.ten_minutes, False,
+                          self.mission2)
+
+        self.evaluate_periods([
+            TimePeriod(self.year2000, self.year2000 + self.ten_minutes),
         ])
 
     def test_flight_period_missing_multiple(self):
@@ -169,5 +227,5 @@ class TestTakeoffOrLandingEventModel(TestAccessLogCommon):
 
         time = self.year2000 + self.ten_minutes
 
-        self.assertTrue(TakeoffOrLandingEvent.user_in_air(self.user1,
-                                                          time=time))
+        self.assertTrue(
+            TakeoffOrLandingEvent.user_in_air(self.user1, time=time))

@@ -1,23 +1,30 @@
 """GPS position model."""
 
+import logging
 from auvsi_suas.models import distance
+from django.contrib import admin
+from django.core import validators
 from django.db import models
 
+logger = logging.getLogger(__name__)
 
-class GpsPosition(models.Model):
-    """GPS position consisting of a latitude and longitude degree value.
 
-    Attributes:
-        latitude: Latitude in degrees.
-        longitude: Longitude in degrees.
-    """
-    latitude = models.FloatField()
-    longitude = models.FloatField()
+class GpsPositionMixin(models.Model):
+    """GPS position mixin for adding a latitude and longitude degree value."""
 
-    def __unicode__(self):
-        """Descriptive text for use in displays."""
-        return unicode("GpsPosition (pk:%s, lat:%s, lon:%s)" %
-                       (str(self.pk), str(self.latitude), str(self.longitude)))
+    # Latitude in degrees.
+    latitude = models.FloatField(validators=[
+        validators.MinValueValidator(-90),
+        validators.MaxValueValidator(90),
+    ])
+    # Longitude in degrees.
+    longitude = models.FloatField(validators=[
+        validators.MinValueValidator(-180),
+        validators.MaxValueValidator(180),
+    ])
+
+    class Meta:
+        abstract = True
 
     def distance_to(self, other):
         """Computes distance to another position.
@@ -41,5 +48,16 @@ class GpsPosition(models.Model):
         Returns:
             True if they are equal.
         """
-        return (self.latitude == other.latitude and
-                self.longitude == other.longitude)
+        return (self.latitude == other.latitude
+                and self.longitude == other.longitude)
+
+
+class GpsPosition(GpsPositionMixin):
+    """GPS position object."""
+    pass
+
+
+@admin.register(GpsPosition)
+class GpsPositionModelAdmin(admin.ModelAdmin):
+    show_full_result_count = False
+    list_display = ('pk', 'latitude', 'longitude')

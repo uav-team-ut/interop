@@ -1,5 +1,5 @@
-sudo: required
-dist: trusty
+sudo: false
+dist: xenial
 language: generic
 
 services:
@@ -8,26 +8,26 @@ services:
 install:
   # Setup tools.
   - sudo ./tools/setup_tools.sh
-  # Build images.
-  - ./server/build.sh
-  - ./client/build.sh
+  # Build the images.
+  - ./server/interop-server.sh build
+  - ./client/interop-client.sh build
 
 script:
   # Test server.
-  - ./server/test.sh
-  - ./server/run.sh
-  - sleep 60
+  - ./server/interop-server.sh create_db
+  - ./server/interop-server.sh test
   # Test client.
-  - ./client/test.sh
-  # Verify that docs build.
-  - ./tools/build_docs.sh
+  - ./server/interop-server.sh load_test_data
+  - ./server/interop-server.sh up_d
+  - ./client/interop-client.sh test
+  - ./server/interop-server.sh down
   # Check formatting.
   - ./tools/format.sh --all
 
-after_success:
-  # Push to Dockerhub.
-  - if [ "$TRAVIS_BRANCH" == "master" ]; then
-    docker login -e="$DOCKER_EMAIL" -u="$DOCKER_USERNAME" -p="$DOCKER_PASSWORD";
-    docker push auvsisuas/interop-server;
-    docker push auvsisuas/interop-client;
-    fi
+deploy:
+  # Push master branch docker images to dockerhub.
+  provider: script
+  script: bash tools/deploy.sh
+  skip_cleanup: true
+  on:
+    branch: master
