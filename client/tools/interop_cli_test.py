@@ -4,16 +4,13 @@ import time
 import unittest
 from pymavlink import mavutil
 
-from interop import Telemetry
-
 
 class InteropCliTestBase(unittest.TestCase):
     """Base for tests."""
-
     def setUp(self):
         """Setup the CLI path and base args."""
-        self.cli_path = os.path.join(
-            os.path.dirname(__file__), "interop_cli.py")
+        self.cli_path = os.path.join(os.path.dirname(__file__),
+                                     "interop_cli.py")
         self.cli_base_args = [
             self.cli_path, '--url', 'http://localhost:8000', '--username',
             'testuser', '--password', 'testpass'
@@ -24,40 +21,40 @@ class InteropCliTestBase(unittest.TestCase):
         self.assertEqual(0, subprocess.call(args))
 
 
+class TestTeams(InteropCliTestBase):
+    """Test able to request statuses of teams."""
+    def test_get_teams(self):
+        """Test getting statuses of teams."""
+        self.assertCliOk(self.cli_base_args + ['teams'])
+
+
 class TestMissions(InteropCliTestBase):
     """Test able to request mission details."""
-
-    def test_get_missions(self):
+    def test_get_mission(self):
         """Test getting mission details."""
-        self.assertCliOk(self.cli_base_args + ['missions'])
+        self.assertCliOk(self.cli_base_args + ['mission', '--mission_id', '1'])
 
 
-class TestTargets(InteropCliTestBase):
-    """Test able to upload targets."""
-
+class TestOdlcs(InteropCliTestBase):
+    """Test able to upload odlcs."""
     def setUp(self):
         """Compute the testdata folder."""
-        super(TestTargets, self).setUp()
-        self.target_dir = os.path.join(os.path.dirname(__file__), "testdata")
+        super(TestOdlcs, self).setUp()
+        self.odlc_dir = os.path.join(os.path.dirname(__file__), "testdata")
 
-    def test_upload_targets(self):
-        """Test uploading targets with Object File Format."""
-        self.assertCliOk(self.cli_base_args + [
-            'targets', '--target_dir', self.target_dir
-        ])
+    def test_get_odlcs(self):
+        """Test getting odlcs."""
+        self.assertCliOk(self.cli_base_args + ['odlcs'])
+        self.assertCliOk(self.cli_base_args + ['odlcs', '--mission_id', '1'])
 
-    def test_legacy_upload_targets(self):
-        """Test uploading targets with legacy format."""
-        target_filepath = os.path.join(self.target_dir, "targets.txt")
-        self.assertCliOk(self.cli_base_args + [
-            'targets', '--target_dir', self.target_dir, '--legacy_filepath',
-            target_filepath
-        ])
+    def test_upload_odlcs(self):
+        """Test uploading odlcs with Object File Format."""
+        self.assertCliOk(self.cli_base_args +
+                         ['odlcs', '--odlc_dir', self.odlc_dir])
 
 
 class TestProbe(InteropCliTestBase):
     """Test able to probe server."""
-
     def setUp(self):
         """Setup process to probe server."""
         super(TestProbe, self).setUp()
@@ -84,13 +81,12 @@ class TestProbe(InteropCliTestBase):
 
 class TestMavlink(InteropCliTestBase):
     """Tests proxying MAVLink packets."""
-
     def setUp(self):
         """Creates a playback and forward of MAVLink packets."""
         super(TestMavlink, self).setUp()
         # Create input and output logs to simulate a source.
-        log_filepath = os.path.join(
-            os.path.dirname(__file__), "testdata/mav.tlog")
+        log_filepath = os.path.join(os.path.dirname(__file__),
+                                    "testdata/mav.tlog")
         self.mlog = mavutil.mavlink_connection(log_filepath)
         self.mout = mavutil.mavlink_connection('127.0.0.1:14550', input=False)
         # Start the forwarding on the CLI.

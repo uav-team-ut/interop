@@ -6,7 +6,6 @@ from django.test import TestCase
 
 class TestMetersToFeet(TestCase):
     """Tests the conversion from meters to feet."""
-
     def test_m_to_ft(self):
         """Performs a data-driven test of the conversion."""
         cases = [
@@ -24,7 +23,6 @@ class TestMetersToFeet(TestCase):
 
 class TestKilometersToFeet(TestCase):
     """Tests the conversion from kilometers to feet."""
-
     def test_km_to_ft(self):
         """Performs a data-driven test of the conversion."""
         cases = [
@@ -42,7 +40,6 @@ class TestKilometersToFeet(TestCase):
 
 class TestFeetToMeters(TestCase):
     """Tests the conversion from feet to meters."""
-
     def test_feet_to_meters(self):
         """Performs a data-driven test of the conversion."""
         cases = [
@@ -60,7 +57,6 @@ class TestFeetToMeters(TestCase):
 
 class TestKnotsToFeetPerSecond(TestCase):
     """Tests the conversion from knots to feet per second."""
-
     def test_knots_to_fps(self):
         """Performs a data-drive test of the conversion."""
         cases = [

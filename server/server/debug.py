@@ -11,7 +11,6 @@ class NonHtmlDebugToolbarMiddleware(object):
 
     Based on http://stackoverflow.com/a/19249559/10817
     """
-
     @staticmethod
     def process_response(request, response):
         if request.GET.get('debug') == '':
@@ -30,6 +29,7 @@ class NonHtmlDebugToolbarMiddleware(object):
                                         '</pre></body></html>'.format(content))
 
         return response
+
 
 # Middleware classes for debug toolbar.
 middleware = ('debug_toolbar.middleware.DebugToolbarMiddleware',

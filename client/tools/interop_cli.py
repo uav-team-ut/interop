@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # CLI for interacting with interop server.
 
 from __future__ import print_function
@@ -6,46 +6,48 @@ import argparse
 import datetime
 import getpass
 import logging
-import pprint
 import sys
 import time
 
-from interop import Client
-from interop import Target
-from interop import Telemetry
-from proxy_mavlink import proxy_mavlink
-from upload_targets import upload_targets, upload_legacy_targets
+from auvsi_suas.client.client import AsyncClient
+from auvsi_suas.proto.interop_api_pb2 import Telemetry
+from google.protobuf import json_format
+from mavlink_proxy import MavlinkProxy
+from upload_odlcs import upload_odlcs
 
 logger = logging.getLogger(__name__)
 
 
-def missions(args, client):
-    missions = client.get_missions()
-    for m in missions:
-        pprint.pprint(m.serialize())
+def teams(args, client):
+    teams = client.get_teams().result()
+    for team in teams:
+        print(json_format.MessageToJson(team))
 
 
-def targets(args, client):
-    if args.legacy_filepath:
-        if not args.target_dir:
-            raise ValueError('--target_dir is required.')
-        upload_legacy_targets(client, args.legacy_filepath, args.target_dir)
-    elif args.target_dir:
-        upload_targets(client, args.target_dir, args.team_id,
-                       args.actionable_override)
+def mission(args, client):
+    mission = client.get_mission(args.mission_id).result()
+    print(json_format.MessageToJson(mission))
+
+
+def odlcs(args, client):
+    if args.odlc_dir:
+        upload_odlcs(client, args.odlc_dir)
     else:
-        targets = client.get_targets()
-        for target in targets:
-            pprint.pprint(target.serialize())
+        odlcs = client.get_odlcs(args.mission_id).result()
+        for odlc in odlcs:
+            print(json_format.MessageToJson(odlc))
 
 
 def probe(args, client):
     while True:
         start_time = datetime.datetime.now()
 
-        telemetry = Telemetry(0, 0, 0, 0)
-        telemetry_resp = client.post_telemetry(telemetry)
-        obstacle_resp = client.get_obstacles()
+        telemetry = Telemetry()
+        telemetry.latitude = 0
+        telemetry.longitude = 0
+        telemetry.altitude = 0
+        telemetry.heading = 0
+        client.post_telemetry(telemetry).result()
 
         end_time = datetime.datetime.now()
         elapsed_time = (end_time - start_time).total_seconds()
@@ -60,7 +62,8 @@ def probe(args, client):
 
 
 def mavlink(args, client):
-    proxy_mavlink(args.device, client)
+    proxy = MavlinkProxy(args.device, client)
+    proxy.proxy()
 
 
 def main():
@@ -82,46 +85,42 @@ def main():
 
     subparsers = parser.add_subparsers(help='Sub-command help.')
 
-    subparser = subparsers.add_parser('missions', help='Get missions.')
-    subparser.set_defaults(func=missions)
+    subparser = subparsers.add_parser('teams', help='Get the status of teams.')
+    subparser.set_defaults(func=teams)
+
+    subparser = subparsers.add_parser('mission', help='Get mission details.')
+    subparser.set_defaults(func=mission)
+    subparser.add_argument('--mission_id',
+                           type=int,
+                           required=True,
+                           help='ID of the mission to get.')
 
     subparser = subparsers.add_parser(
-        'targets',
-        help='Upload targets.',
-        description='''Download or upload targets to/from the interoperability
+        'odlcs',
+        help='Upload odlcs.',
+        description='''Download or upload odlcs to/from the interoperability
 server.
 
-Without extra arguments, this prints all targets that have been uploaded to the
+Without extra arguments, this prints all odlcs that have been uploaded to the
 server.
 
-With --target_dir, this uploads new targets to the server.
+With --odlc_dir, this uploads new odlcs to the server.
 
-This tool searches for target JSON and images files within --target_dir
-conforming to the 2017 Object File Format and uploads the target
+This tool searches for odlc JSON and images files within --odlc_dir
+conforming to the 2017 Object File Format and uploads the odlc
 characteristics and thumbnails to the interoperability server.
 
-Alternatively, if --legacy_filepath is specified, that file is parsed as the
-legacy 2016 tab-delimited target file format. Image paths referenced in the
-file are relative to --target_dir.
-
-There is no deduplication logic. Targets will be uploaded multiple times, as
-unique targets, if the tool is run multiple times.''',
+There is no deduplication logic. Odlcs will be uploaded multiple times, as
+unique odlcs, if the tool is run multiple times.''',
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    subparser.set_defaults(func=targets)
+    subparser.set_defaults(func=odlcs)
+    subparser.add_argument('--mission_id',
+                           type=int,
+                           help='Mission ID to restrict ODLCs retrieved.',
+                           default=None)
     subparser.add_argument(
-        '--legacy_filepath',
-        help='Target file in the legacy 2016 tab-delimited format.')
-    subparser.add_argument(
-        '--target_dir',
-        help='Enables target upload. Directory containing target data.')
-    subparser.add_argument(
-        '--team_id',
-        help='''The username of the team on whose behalf to submit targets.
-Must be admin user to specify.''')
-    subparser.add_argument(
-        '--actionable_override',
-        help='''Manually sets all the targets in the target dir to be
-actionable. Must be admin user to specify.''')
+        '--odlc_dir',
+        help='Enables odlc upload. Directory containing odlc data.')
 
     subparser = subparsers.add_parser('probe', help='Send dummy requests.')
     subparser.set_defaults(func=probe)
@@ -148,7 +147,7 @@ forward as telemetry to interop server.''')
         password = getpass.getpass('Interoperability Password: ')
 
     # Create client and dispatch subcommand.
-    client = Client(args.url, args.username, password)
+    client = AsyncClient(args.url, args.username, password)
     args.func(args, client)
 
 

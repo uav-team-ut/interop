@@ -1,77 +1,64 @@
-FROM ubuntu:14.04
+FROM ubuntu:20.04
 WORKDIR /interop/server
 
+# Set the time zone to the competition time zone.
+RUN ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
+
 # Install server base dependencies.
-RUN sudo apt-get -qq update && sudo apt-get -qq install -y \
-        apache2 \
-        apache2-utils \
-        curl \
-        libapache2-mod-auth-pgsql \
-        libapache2-mod-auth-plain \
-        libapache2-mod-python \
-        libapache2-mod-wsgi \
-        libapache2-mod-xsendfile \
-        memcached \
-        nodejs \
+RUN apt-get -qq update && apt-get -qq install -y \
+        nginx \
         npm \
-        postgresql \
         postgresql-client \
         protobuf-compiler \
-        python \
+        python3 \
         # Install from apt as it's much faster.
-        python-matplotlib \
-        python-numpy \
-        python-pip \
-        python-psycopg2 \
-        python-pyproj \
-        python-scipy
+        python3-matplotlib \
+        python3-numpy \
+        python3-pip \
+        python3-psycopg2 \
+        python3-pyproj \
+        sudo
 
-# Install server Javascript requirements.
-RUN sudo ln -snf /usr/bin/nodejs /usr/local/bin/node && \
-    sudo npm install -g \
-        karma \
-        karma-chrome-launcher \
-        karma-jasmine \
-        karma-phantomjs-launcher \
-        phantomjs
+# Create storage for object images.
+RUN mkdir -p /var/www/media/objects && \
+    chown -R www-data /var/www
 
 # Install server Python requirements.
-COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+COPY server/config/requirements.txt config/requirements.txt
+RUN pip3 install -r config/requirements.txt
 
-# Configure database, web server, Django.
-COPY manage.py manage.py
-COPY server server
-COPY auvsi_suas/__init__.py auvsi_suas/__init__.py
-COPY auvsi_suas/models/__init__.py auvsi_suas/models/__init__.py
-COPY auvsi_suas/views/__init__.py auvsi_suas/views/__init__.py
-COPY auvsi_suas/views/auvsi_admin/__init__.py auvsi_suas/views/auvsi_admin/__init__.py
-COPY auvsi_suas/migrations auvsi_suas/migrations
-COPY config config
-COPY fixtures fixtures
-RUN ./config/configure_postgresql.sh && \
-    ./config/configure_apache.sh && \
-    ./config/configure_django.sh
+# Install server JS requirements.
+COPY server/config/npm.txt config/npm.txt
+RUN cat config/npm.txt | xargs sudo npm install -g
+
+# Configure web server.
+COPY server/config/nginx.conf /etc/nginx/sites-enabled/default
+RUN sudo mkdir -p /var/log/uwsgi
+
+# Compile static assets.
+COPY server/manage.py manage.py
+COPY server/server server
+COPY server/auvsi_suas/__init__.py auvsi_suas/__init__.py
+COPY server/auvsi_suas/models/__init__.py auvsi_suas/models/__init__.py
+COPY server/auvsi_suas/views/__init__.py auvsi_suas/views/__init__.py
+COPY server/auvsi_suas/frontend auvsi_suas/frontend
+RUN ./manage.py collectstatic --noinput
+
+# Copy all remaining code.
+COPY server/ .
 
 # Compile protobuf definitions.
-COPY auvsi_suas/proto auvsi_suas/proto
-RUN ./config/configure_proto.sh
-
-# Copy remaining code.
-COPY . .
-
-# Load initial data.
-RUN sudo service postgresql start && \
-    python manage.py loaddata fixtures/test_fixture.yaml
+COPY proto auvsi_suas/proto
+RUN protoc --python_out=. auvsi_suas/proto/*.proto
 
 # Host-mountable sections.
-VOLUME /var/log/apache2 /var/lib/postgresql/9.3/data
+VOLUME /var/log/uwsgi /var/lib/postgresql /var/www/media/objects
 
-# On run: start database, cache, server, and don't exit.
-CMD sudo service postgresql start && \
-  sudo service memcached start && \
-  sudo service apache2 start && \
-  tail -f /dev/null
+# Commands to execute on startup.
+CMD uwsgi --ini config/uwsgi.ini && \
+    sudo nginx && \
+    tail -f /dev/null
 
-HEALTHCHECK --interval=10s --timeout=3s \
-    CMD curl -f http://localhost/ || exit 1
+# Command to check health of container.
+HEALTHCHECK \
+  CMD ./healthcheck.py --check_homepage

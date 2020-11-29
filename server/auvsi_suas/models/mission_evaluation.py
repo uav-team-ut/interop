@@ -1,24 +1,66 @@
 """Mission evaluation."""
 
-import datetime
 import itertools
 import logging
-from django.conf import settings
+from auvsi_suas.models.mission_judge_feedback import MissionJudgeFeedback
+from auvsi_suas.models.odlc import Odlc
+from auvsi_suas.models.odlc import OdlcEvaluator
+from auvsi_suas.models.takeoff_or_landing_event import TakeoffOrLandingEvent
+from auvsi_suas.models.uas_telemetry import UasTelemetry
+from auvsi_suas.proto import interop_admin_api_pb2
+from auvsi_suas.proto import interop_api_pb2
 from django.contrib.auth.models import User
 
-from auvsi_suas.models import distance
-from auvsi_suas.models import units
-from auvsi_suas.models.fly_zone import FlyZone
-from auvsi_suas.models.mission_clock_event import MissionClockEvent
-from auvsi_suas.models.mission_judge_feedback import MissionJudgeFeedback
-from auvsi_suas.models.takeoff_or_landing_event import TakeoffOrLandingEvent
-from auvsi_suas.models.target import Target
-from auvsi_suas.models.target import TargetEvaluator
-from auvsi_suas.models.uas_telemetry import UasTelemetry
-from auvsi_suas.proto import mission_pb2
-
-# Logging for the module
 logger = logging.getLogger(__name__)
+
+# The time between interop telemetry posts that's a prereq for other tasks.
+INTEROP_TELEM_THRESHOLD_TIME_SEC = 1.0
+
+# Weight of timeline points for mission time.
+MISSION_TIME_WEIGHT = 0.8
+# Weight of timeline points for not taking a timeout.
+TIMEOUT_WEIGHT = 0.2
+# Minimum amount of flight time without losing points.
+FLIGHT_TIME_MIN_SEC = 20 * 60
+# Maximum amount of flight time allowed.
+FLIGHT_TIME_MAX_SEC = 30 * 60
+# Maximum amount of post process time allowed.
+PROCESS_TIME_MAX_SEC = 10 * 60
+# Mission time points lost due for every second over max time.
+MISSION_TIME_PENALTY_FROM_SEC = 0.03
+# Weighting of flight time relative to post process time.
+FLIGHT_TO_PROCESS_TIME_WEIGHT = 5.0
+
+# Ratio of points lost per takeover.
+AUTONOMOUS_FLIGHT_TAKEOVER = 0.10
+# Ratio of points lost per out of bounds.
+BOUND_PENALTY = 0.1
+SAFETY_BOUND_PENALTY = 1.0
+# Ratio of points lost for TFOA and crash.
+TFOA_PENALTY = 0.25
+CRASH_PENALTY = 0.50
+# Weight of accuracy points to all autonomous flight.
+WAYPOINT_ACCURACY_WEIGHT = 1.0
+
+# Weight of air drop points for accuracy.
+AIR_DROP_ACCURACY_WEIGHT = 0.5
+# Weight of air drop points for UGV driving to location.
+AIR_DROP_DRIVE_WEIGHT = 0.5
+# Air drop to point ratio.
+AIR_DROP_DISTANCE_POINT_RATIO = {
+    interop_admin_api_pb2.MissionJudgeFeedback.NO_POINTS: 0,
+    interop_admin_api_pb2.MissionJudgeFeedback.WITHIN_05_FT: 1,
+    interop_admin_api_pb2.MissionJudgeFeedback.WITHIN_15_FT: 0.5,
+    interop_admin_api_pb2.MissionJudgeFeedback.WITHIN_40_FT: 0.25,
+}
+
+# Scoring weights.
+TIMELINE_WEIGHT = 0.1
+AUTONOMOUS_WEIGHT = 0.2
+OBSTACLE_WEIGHT = 0.2
+OBJECT_WEIGHT = 0.2
+AIR_DROP_WEIGHT = 0.2
+OPERATIONAL_WEIGHT = 0.1
 
 
 def generate_feedback(mission_config, user, team_eval):
@@ -31,36 +73,19 @@ def generate_feedback(mission_config, user, team_eval):
     """
     feedback = team_eval.feedback
 
-    # Calculate the total mission clock time.
-    missions = MissionClockEvent.missions(user)
-    mission_clock_time = datetime.timedelta(seconds=0)
-    for mission in missions:
-        duration = mission.duration()
-        if duration is None:
-            team_eval.warnings.append('Infinite mission clock.')
-        else:
-            mission_clock_time += duration
-    feedback.mission_clock_time_sec = mission_clock_time.total_seconds()
-
-    # Calculate total time in air.
-    flight_periods = TakeoffOrLandingEvent.flights(user)
-    if flight_periods:
-        flight_time = reduce(lambda x, y: x + y, [p.duration()
-                                                  for p in flight_periods])
-        feedback.flight_time_sec = flight_time.total_seconds()
-    else:
-        feedback.flight_time_sec = 0
     # Find the user's flights.
+    flight_periods = TakeoffOrLandingEvent.flights(mission_config, user)
     for period in flight_periods:
         if period.duration() is None:
-            team_eval.warnings.append('Infinite flight period.')
+            team_eval.warnings.append(
+                'Infinite flight period, may be missing TakeoffOrLandingEvent.'
+            )
+            break
     uas_period_logs = [
         UasTelemetry.dedupe(logs)
         for logs in UasTelemetry.by_time_period(user, flight_periods)
     ]
     uas_logs = list(itertools.chain.from_iterable(uas_period_logs))
-    if not uas_logs:
-        team_eval.warnings.append('No UAS telemetry logs.')
 
     # Determine interop telemetry rates.
     telem_max, telem_avg = UasTelemetry.rates(user,
@@ -71,53 +96,41 @@ def generate_feedback(mission_config, user, team_eval):
     if telem_avg:
         feedback.uas_telemetry_time_avg_sec = telem_avg
 
-    # Determine if the uas went out of bounds. This must be done for
-    # each period individually so time between periods isn't counted as
-    # out of bounds time. Note that this calculates reported time out
-    # of bounds, not actual or possible time spent out of bounds.
-    out_of_bounds = datetime.timedelta(seconds=0)
-    feedback.boundary_violations = 0
-    for logs in uas_period_logs:
-        bv, bt = FlyZone.out_of_bounds(mission_config.fly_zones.all(), logs)
-        feedback.boundary_violations += bv
-        out_of_bounds += bt
-    feedback.out_of_bounds_time_sec = out_of_bounds.total_seconds()
-
     # Determine if the uas hit the waypoints.
-    feedback.waypoints.extend(UasTelemetry.satisfied_waypoints(
-        mission_config.home_pos, mission_config.mission_waypoints.order_by(
-            'order'), uas_logs))
+    feedback.waypoints.extend(
+        UasTelemetry.satisfied_waypoints(
+            mission_config.home_pos,
+            mission_config.mission_waypoints.order_by('order'), uas_logs))
 
-    # Evaluate the targets.
-    user_targets = Target.objects.filter(user=user).all()
-    evaluator = TargetEvaluator(user_targets, mission_config.targets.all())
-    feedback.target.CopyFrom(evaluator.evaluate())
+    # Evaluate the object detections.
+    user_odlcs = Odlc.objects.filter(user=user).filter(
+        mission=mission_config.pk).all()
+    for odlc in user_odlcs:
+        if odlc.thumbnail and odlc.thumbnail_approved is None:
+            team_eval.warnings.append(
+                'Odlc thumbnail review not set, may need to review ODLCs.')
+            break
+    evaluator = OdlcEvaluator(user_odlcs, mission_config.odlcs.all(),
+                              flight_periods)
+    feedback.odlc.CopyFrom(evaluator.evaluate())
 
-    # Determine collisions with stationary and moving obstacles.
+    # Determine collisions with stationary.
     for obst in mission_config.stationary_obstacles.all():
         obst_eval = feedback.stationary_obstacles.add()
-        obst_eval.id = obst.pk
-        obst_eval.hit = obst.evaluate_collision_with_uas(uas_logs)
-    for obst in mission_config.moving_obstacles.all():
-        obst_eval = feedback.moving_obstacles.add()
         obst_eval.id = obst.pk
         obst_eval.hit = obst.evaluate_collision_with_uas(uas_logs)
 
     # Add judge feedback.
     try:
         judge_feedback = MissionJudgeFeedback.objects.get(
-            mission=mission_config.pk,
-            user=user.pk)
+            mission=mission_config.pk, user=user.pk)
         feedback.judge.CopyFrom(judge_feedback.proto())
+        if feedback.judge.min_auto_flight_time and not flight_periods:
+            team_eval.warnings.append(
+                'Min flight time achieved by no flight periods, may be missing TakeoffOrLandingEvent.'
+            )
     except MissionJudgeFeedback.DoesNotExist:
         team_eval.warnings.append('No MissionJudgeFeedback for team.')
-
-    # Sanity check mission time.
-    judge_mission_clock = (
-        feedback.judge.flight_time_sec + feedback.judge.post_process_time_sec)
-    if abs(feedback.mission_clock_time_sec - judge_mission_clock) > 30:
-        team_eval.warnings.append(
-            'Mission clock differs between interop and judge.')
 
 
 def score_team(team_eval):
@@ -131,115 +144,116 @@ def score_team(team_eval):
 
     # Can't score without judge feedback.
     if not feedback.HasField('judge'):
-        team_eval.warnings.append('Cant score due to no judge feedback.')
+        team_eval.warnings.append('No judge feedback, skipping scoring.')
         return
 
     # Determine telemetry prerequisite.
     telem_prereq = False
-    if (feedback.HasField('uas_telemetry_time_avg_sec') and
-            feedback.uas_telemetry_time_avg_sec > 0):
-        telem_prereq = feedback.uas_telemetry_time_avg_sec <= settings.INTEROP_TELEM_THRESHOLD_TIME_SEC
+    if (feedback.HasField('uas_telemetry_time_avg_sec')
+            and feedback.uas_telemetry_time_avg_sec > 0):
+        telem_prereq = feedback.uas_telemetry_time_avg_sec <= INTEROP_TELEM_THRESHOLD_TIME_SEC
+
+    def points_for_time_sec(flight_sec, process_sec):
+        return FLIGHT_TO_PROCESS_TIME_WEIGHT * max(
+            0, flight_sec - FLIGHT_TIME_MIN_SEC) + process_sec
+
     # Score timeline.
     timeline = score.timeline
-    flight_points = feedback.judge.flight_time_sec * settings.FLIGHT_TIME_SEC_TO_POINTS
-    process_points = feedback.judge.post_process_time_sec * settings.PROCESS_TIME_SEC_TO_POINTS
-    total_time_points = max(
-        0, settings.MISSION_TIME_TOTAL_POINTS - flight_points - process_points)
-    timeline.mission_time = total_time_points / settings.MISSION_TIME_TOTAL_POINTS
-    total_time = feedback.judge.flight_time_sec + feedback.judge.post_process_time_sec
-    over_time = max(0, total_time - settings.MISSION_MAX_TIME_SEC)
-    timeline.mission_penalty = over_time * settings.MISSION_TIME_PENALTY_FROM_SEC
+    time_points = points_for_time_sec(feedback.judge.flight_time_sec,
+                                      feedback.judge.post_process_time_sec)
+    max_time_points = points_for_time_sec(FLIGHT_TIME_MAX_SEC,
+                                          PROCESS_TIME_MAX_SEC)
+    timeline.mission_time = max(0, (max_time_points - time_points) /
+                                max_time_points)
+    timeline.mission_penalty = MISSION_TIME_PENALTY_FROM_SEC * (
+        max(0, feedback.judge.flight_time_sec - FLIGHT_TIME_MAX_SEC) +
+        max(0, feedback.judge.post_process_time_sec - PROCESS_TIME_MAX_SEC))
     timeline.timeout = 0 if feedback.judge.used_timeout else 1
-    timeline.score_ratio = (
-        (settings.MISSION_TIME_WEIGHT * timeline.mission_time) +
-        (settings.TIMEOUT_WEIGHT *
-         timeline.timeout) - timeline.mission_penalty)
+    timeline.score_ratio = ((MISSION_TIME_WEIGHT * timeline.mission_time) +
+                            (TIMEOUT_WEIGHT * timeline.timeout) -
+                            timeline.mission_penalty)
 
     # Score autonomous flight.
     flight = score.autonomous_flight
-    manual_flight = feedback.judge.manual_flight_time_sec
-    autonomous_flight = \
-            feedback.flight_time_sec - manual_flight
-    if (autonomous_flight >= settings.AUTONOMOUS_FLIGHT_TIME_SEC and
-            manual_flight <= settings.MANUAL_FLIGHT_TIME_SEC):
-        takeovers = feedback.judge.safety_pilot_takeovers
-        flight.flight = max(0, 1 -
-                            (takeovers * settings.AUTONOMOUS_FLIGHT_TAKEOVER))
-    else:
-        flight.flight = 0
     flight.telemetry_prerequisite = telem_prereq
-    flight.waypoint_capture = (float(feedback.judge.waypoints_captured) /
-                               len(feedback.waypoints))
-    wpt_scores = [w.score_ratio for w in feedback.waypoints]
     if telem_prereq:
-        flight.waypoint_accuracy = (reduce(lambda x, y: x + y, wpt_scores) /
-                                    len(feedback.waypoints))
+        wpt_scores = [w.score_ratio for w in feedback.waypoints]
+        flight.waypoint_accuracy = sum(wpt_scores) / len(feedback.waypoints)
     else:
         flight.waypoint_accuracy = 0
+    flight.safety_pilot_takeover_penalty = AUTONOMOUS_FLIGHT_TAKEOVER * feedback.judge.safety_pilot_takeovers
     flight.out_of_bounds_penalty = (
-        feedback.judge.out_of_bounds * settings.BOUND_PENALTY +
-        feedback.judge.unsafe_out_of_bounds * settings.SAFETY_BOUND_PENALTY)
-    flight.score_ratio = (
-        settings.AUTONOMOUS_FLIGHT_FLIGHT_WEIGHT * flight.flight +
-        settings.WAYPOINT_CAPTURE_WEIGHT * flight.waypoint_capture +
-        settings.WAYPOINT_ACCURACY_WEIGHT * flight.waypoint_accuracy -
-        flight.out_of_bounds_penalty)
+        feedback.judge.out_of_bounds * BOUND_PENALTY +
+        feedback.judge.unsafe_out_of_bounds * SAFETY_BOUND_PENALTY)
+    if feedback.judge.things_fell_off_uas:
+        flight.things_fell_off_penalty = TFOA_PENALTY
+    else:
+        flight.things_fell_off_penalty = 0
+    if feedback.judge.crashed:
+        flight.crashed_penalty = CRASH_PENALTY
+    else:
+        flight.crashed_penalty = 0
+    flight.score_ratio = (WAYPOINT_ACCURACY_WEIGHT * flight.waypoint_accuracy -
+                          flight.safety_pilot_takeover_penalty -
+                          flight.out_of_bounds_penalty -
+                          flight.things_fell_off_penalty -
+                          flight.crashed_penalty)
 
     # Score obstacle avoidance.
     avoid = score.obstacle_avoidance
     avoid.telemetry_prerequisite = telem_prereq
     if telem_prereq:
-        avoid.stationary_obstacle = (reduce(
-            lambda x, y: x + y, [0.0 if o.hit else 1.0
-                                 for o in feedback.stationary_obstacles]) /
-                                     len(feedback.stationary_obstacles))
-        avoid.moving_obstacle = (reduce(lambda x, y: x + y,
-                                        [0.0 if o.hit else 1.0
-                                         for o in feedback.moving_obstacles]) /
-                                 len(feedback.moving_obstacles))
+        avoid.score_ratio = pow(
+            sum([0.0 if o.hit else 1.0
+                 for o in feedback.stationary_obstacles]) /
+            len(feedback.stationary_obstacles), 3)
     else:
-        avoid.stationary_obstacle = 0
-        avoid.moving_obstacle = 0
-    avoid.score_ratio = (
-        avoid.stationary_obstacle * settings.STATIONARY_OBST_WEIGHT +
-        avoid.moving_obstacle * settings.STATIONARY_OBST_WEIGHT)
+        avoid.score_ratio = 0
 
     # Score objects.
     objects = score.object
-    object_eval = feedback.target
+    object_eval = feedback.odlc
     object_field_mapping = [
         ('classifications_score_ratio', 'characteristics'),
         ('geolocation_score_ratio', 'geolocation'),
         ('actionable_score_ratio', 'actionable'),
         ('autonomous_score_ratio', 'autonomy'),
-        ('interop_score_ratio', 'interoperability'),
     ]
     for eval_field, score_field in object_field_mapping:
-        total = reduce(lambda x, y: x + y, [getattr(o, eval_field)
-                                            for o in object_eval.targets])
-        setattr(objects, score_field, float(total) / len(object_eval.targets))
+        if object_eval.odlcs:
+            total = sum([getattr(o, eval_field) for o in object_eval.odlcs])
+            setattr(objects, score_field,
+                    float(total) / len(object_eval.odlcs))
+        else:
+            setattr(objects, score_field, 0)
     objects.extra_object_penalty = object_eval.extra_object_penalty_ratio
     objects.score_ratio = object_eval.score_ratio
 
-    # Score air delivery.
-    air = score.air_delivery
-    air.delivery_accuracy = feedback.judge.air_delivery_accuracy_ft
-    air.score_ratio = max(
-        0, (settings.AIR_DELIVERY_THRESHOLD_FT - air.delivery_accuracy) /
-        settings.AIR_DELIVERY_THRESHOLD_FT)
+    # Score air drop.
+    air = score.air_drop
+    air.drop_accuracy = AIR_DROP_DISTANCE_POINT_RATIO[
+        feedback.judge.air_drop_accuracy]
+    air.drive_to_location = 1 if feedback.judge.ugv_drove_to_location else 0
+    air.score_ratio = (AIR_DROP_ACCURACY_WEIGHT * air.drop_accuracy +
+                       AIR_DROP_DRIVE_WEIGHT * air.drive_to_location)
 
     # Score operational excellence.
     score.operational_excellence.score_ratio = (
         feedback.judge.operational_excellence_percent / 100.0)
 
     # Compute total score.
-    score.score_ratio = (
-        settings.TIMELINE_WEIGHT * score.timeline.score_ratio +
-        settings.AUTONOMOUS_WEIGHT * score.autonomous_flight.score_ratio +
-        settings.OBSTACLE_WEIGHT * score.obstacle_avoidance.score_ratio +
-        settings.OBJECT_WEIGHT * score.object.score_ratio +
-        settings.AIR_DELIVERY_WEIGHT * score.air_delivery.score_ratio +
-        settings.OPERATIONAL_WEIGHT * score.operational_excellence.score_ratio)
+    if feedback.judge.min_auto_flight_time:
+        score.score_ratio = max(
+            0, TIMELINE_WEIGHT * score.timeline.score_ratio +
+            AUTONOMOUS_WEIGHT * score.autonomous_flight.score_ratio +
+            OBSTACLE_WEIGHT * score.obstacle_avoidance.score_ratio +
+            OBJECT_WEIGHT * score.object.score_ratio +
+            AIR_DROP_WEIGHT * score.air_drop.score_ratio +
+            OPERATIONAL_WEIGHT * score.operational_excellence.score_ratio)
+    else:
+        team_eval.warnings.append(
+            'Insufficient flight time to receive any mission points.')
+        score.score_ratio = 0
 
 
 def evaluate_teams(mission_config, users=None):
@@ -252,22 +266,37 @@ def evaluate_teams(mission_config, users=None):
         A auvsi_suas.proto.MultiUserMissionEvaluation.
     """
     # Start a results map from user to MissionEvaluation.
-    mission_eval = mission_pb2.MultiUserMissionEvaluation()
+    mission_eval = interop_admin_api_pb2.MultiUserMissionEvaluation()
 
     # If not provided, eval all users.
     if users is None:
         users = User.objects.all()
 
     logger.info('Starting team evaluations.')
-    for user in users:
+    for user in sorted(users, key=lambda u: u.username):
         # Ignore admins.
         if user.is_superuser:
+            logger.info('Filtering superuser: %s.' % user.username)
+            continue
+
+        # Filter inactive users.
+        has_flights = TakeoffOrLandingEvent.objects.filter(user=user).filter(
+            mission=mission_config).exists()
+        has_odlcs = Odlc.objects.filter(user=user).filter(
+            mission=mission_config).exists()
+        has_feedback = MissionJudgeFeedback.objects.filter(user=user).filter(
+            mission=mission_config).exists()
+        if not has_flights and not has_odlcs and not has_feedback:
+            logger.info('Filtering inactive user: %s.' % user.username)
             continue
 
         # Start the evaluation data structure.
         logger.info('Evaluation starting for user: %s.' % user.username)
         team_eval = mission_eval.teams.add()
-        team_eval.team = user.username
+        team_eval.mission = mission_config.pk
+        team_eval.team.username = user.username
+        team_eval.team.name = user.first_name
+        team_eval.team.university = user.last_name
         # Generate feedback.
         generate_feedback(mission_config, user, team_eval)
         # Generate score from feedback.

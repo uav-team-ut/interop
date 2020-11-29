@@ -1,25 +1,18 @@
 """Waypoint model."""
 
-from aerial_position import AerialPosition
+import logging
+from auvsi_suas.models.aerial_position import AerialPositionMixin
+from django.contrib import admin
 from django.db import models
 
+logger = logging.getLogger(__name__)
 
-class Waypoint(models.Model):
-    """A waypoint consists of an aerial position and its order in a set.
 
-    Attributes:
-        position: Aerial position.
-        order: Waypoint relative order number. Should be unique per waypoint
-            set.
-    """
-    position = models.ForeignKey(AerialPosition)
+class Waypoint(AerialPositionMixin):
+    """A waypoint consists of an aerial position and its order in a set."""
+
+    # Waypoint relative order number. Should be unique per waypoint set.
     order = models.IntegerField(db_index=True)
-
-    def __unicode__(self):
-        """Descriptive text for use in displays."""
-        return unicode("Waypoint (pk:%s, order:%s, pos:%s)" %
-                       (str(self.pk), str(self.order),
-                        self.position.__unicode__()))
 
     def distance_to(self, other):
         """Computes distance to another waypoint.
@@ -28,4 +21,10 @@ class Waypoint(models.Model):
         Returns:
           Distance in feet.
         """
-        return self.position.distance_to(other.position)
+        return super(Waypoint, self).distance_to(other)
+
+
+@admin.register(Waypoint)
+class WaypointModelAdmin(admin.ModelAdmin):
+    show_full_result_count = False
+    list_display = ('pk', 'order', 'latitude', 'longitude', 'altitude_msl')

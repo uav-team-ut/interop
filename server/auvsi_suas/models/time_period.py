@@ -1,9 +1,13 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class TimePeriod(object):
     """
     Describe a continuous period of time.
     A value of None indicates infinity. Both start and end are inclusive.
     """
-
     @classmethod
     def from_events(cls, events, is_start_func, is_end_func):
         """Gets a list of time periods from a list of events.
@@ -26,7 +30,6 @@ class TimePeriod(object):
             periods.append(TimePeriod(None, events[0].timestamp))
         # Detect transitions from start->end and end->start.
         start_time = None
-        end_time = None
         started = False
         for event in events:
             if not started and is_start_func(event):
@@ -44,11 +47,6 @@ class TimePeriod(object):
     def __init__(self, start=None, end=None):
         self.start = start
         self.end = end
-
-    def __unicode__(self):
-        """Descriptive text for use in displays."""
-        return unicode('TimePeriod (start=%s, end=%s)' % (self.start,
-                                                          self.end))
 
     def __eq__(self, other):
         """Two TimePeriods are equal if their attributes are equal."""

@@ -1,26 +1,21 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Installs software for tools.
 
-SETUP=$(readlink -f $(dirname ${BASH_SOURCE[0]}))
+TOOLS=$(dirname ${BASH_SOURCE[0]})
 LOG_NAME=setup_tools
-source ${SETUP}/common.sh
+source ${TOOLS}/common.sh
 
 log "Installing APT packages."
 apt-get -qq update
 apt-get -qq install -y \
-    graphviz \
-    postgresql-client \
+    parallel \
     protobuf-compiler \
-    python-matplotlib \
-    python-nose \
-    python-numpy \
-    python-pip \
-    python-psycopg2 \
-    python-pyproj \
-    python-scipy \
-    python-virtualenv
+    python-virtualenv \
+    python3-pip
 
 log "Building tools virtualenv."
-(cd ${REPO}/tools && \
-    virtualenv -p /usr/bin/python2 venv && \
-    pip install -U -r requirements.txt)
+(cd ${TOOLS} && \
+    virtualenv -p /usr/bin/python3 venv && \
+    source venv/bin/activate && \
+    pip install -U -r requirements.txt && \
+    deactivate)
